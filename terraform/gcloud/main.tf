@@ -20,6 +20,4 @@ module "network" {
 module "compute" {
   source          = "./modules/compute"
   subnet          = module.network.subnet
-  num_controllers = var.num_controllers
-  num_workers = var.num_workers
 }

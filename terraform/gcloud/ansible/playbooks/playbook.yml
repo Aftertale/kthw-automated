@@ -1,0 +1,175 @@
+---
+- name: Clean up the directories!
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: clean up Temp
+      ansible.builtin.shell: rm *
+      args:
+        executable: "/bin/bash"
+        chdir: "{{ temp_dir }}"
+
+- name: Set up the root CA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Template the CA csr
+      ansible.builtin.template:
+        src: "{{ csr_template }}"
+        dest: "{{ temp_dir }}/ca-csr.json"
+        mode: '0644'
+      vars:
+        cn: Kubernetes
+        o: Kubernetes
+        ou: CA
+
+    - name: Generate Root Certificates
+      ansible.builtin.shell: >
+        set -o errexit; \
+        set -o pipefail; \
+        cfssl gencert \
+        -config {{ playbook_dir }}/../files/ca-config.json \
+        -initca {{ temp_dir }}/ca-csr.json \
+        | cfssljson -bare ca
+      args:
+        executable: "/bin/bash"
+        chdir: "{{ temp_dir }}"
+        creates: "{{ temp_dir }}/ca-key.pem"
+
+    - name: Template the admin csr
+      ansible.builtin.template:
+        src: "{{ csr_template }}"
+        dest: "{{ temp_dir }}/admin-csr.json"
+        mode: '0644'
+      vars:
+        cn: admin
+        o: system:masters
+        ou: "Kubernetes The Hard Way"
+
+    - name: Generate Admin Certificate
+      ansible.builtin.shell: >
+        set -o errexit; \
+        set -o pipefail; \
+        cfssl gencert \
+        -config {{ playbook_dir }}/../files/ca-config.json \
+        -initca {{ temp_dir }}/admin-csr.json \
+        | cfssljson -bare ca
+      args:
+        executable: "/bin/bash"
+        chdir: "{{ temp_dir }}"
+        creates: "{{ temp_dir }}/admin-key.pem"
+
+    - name: Template the CSR for Kube-Controller
+      ansible.builtin.template:
+        src: "{{ csr_template }}"
+        dest: "{{ temp_dir }}/kube-controller-manager-csr.json"
+        mode: '0644'
+      vars:
+        cn: system:kube-controller-manager
+        o: system:kube-controller-manager
+        ou: "Kubernetes The Hard Way"
+
+    - name: Generate Kube-Controller Certificate
+      ansible.builtin.shell: >
+        set -o errexit; \
+        set -o pipefail; \
+        cfssl gencert \
+        -ca {{ temp_dir }}/ca.pem \
+        -ca-key {{ temp_dir }}/ca-key.pem \
+        -config {{ playbook_dir }}/../files/ca-config.json \
+        -profile kubernetes \
+        {{ temp_dir }}/kube-controller-manager-csr.json \
+        | cfssljson -bare kube-controller-manager
+
+    - name: Template the Kube-Proxy CSR
+      ansible.builtin.template:
+        src: "{{ csr_template }}"
+        dest: "{{ temp_dir }}/kube-proxy-csr.json"
+        mode: 0644
+      vars:
+        cn: system:kube-proxy
+        o: system:node-proxier
+        ou: Kubernetes The Hard Way
+
+    - name: Generate the Kube Proxy Certificate
+      ansible.builtin.shell: >
+        set -o errexit; \
+        set -o pipefail; \
+        cfssl gencert \
+        -ca {{ temp_dir }}/ca.pem \
+        -ca-key {{ temp_dir }}/ca-key.pem \
+        -config {{ playbook_dir }}/../files/ca-config.json \
+        -profile kubernetes \
+        {{ temp_dir }}/kube-proxy-csr.json \
+        | cfssljson -bare kube-proxy
+
+    - name: Template the Kube-Scheduler CSR
+      ansible.builtin.template:
+        src: "{{ csr_template }}"
+        dest: "{{ temp_dir }}/kube-scheduler-csr.json"
+        mode: 0644
+      vars:
+        cn: system:kube-scheduler
+        o: system:kube-scheduler
+        ou: Kubernetes The Hard Way
+
+    - name: Generate the Kube-Scheduler
+      ansible.builtin.shell: >
+        set -o errexit; \
+        set -o pipefail; \
+        cfssl gencert \
+        -ca {{ temp_dir }}/ca.pem \
+        -ca-key {{ temp_dir }}/ca-key.pem \
+        -config {{ playbook_dir }}/../files/ca-config.json \
+        -profile kubernetes \
+        {{ temp_dir }}/kube-scheduler-csr.json \
+        | cfssljson -bare kube-scheduler
+
+- name: Create certs for the workers
+  hosts: workers
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Template the Kubelet certs
+      ansible.builtin.template:
+        src: "{{ csr_template }}"
+        dest: "{{ playbook_dir }}/../temp/{{ inventory_hostname }}-csr.json"
+        mode: '0644'
+      vars:
+        cn: "system:node:{{ inventory_hostname }}"
+        o: "system:nodes"
+        ou: "Kubernetes The Hard Way"
+      delegate_to: 127.0.0.1
+
+    - name: Get the IP Address of the worker
+      ansible.builtin.shell: terraform output -json worker_ips | dasel select -p json --plain .{{ inventory_hostname }}
+      register: ip_address
+      args:
+        executable: "/bin/bash"
+        chdir: "{{ playbook_dir }}/../../"
+      delegate_to: 127.0.0.1
+      
+    - name: Print the ip address, please
+      ansible.builtin.debug: 
+        msg: "{{ ip_address.stdout_lines[0] }}"
+      delegate_to: 127.0.0.1
+
+    - name: Generate Kubelet Certs
+      ansible.builtin.shell: >
+        set -o errexit; \
+        set -o pipefail; \
+        cfssl gencert \
+        -config {{ playbook_dir }}/../files/ca-config.json \
+        -ca {{ playbook_dir }}/../temp/ca.pem \
+        -ca-key {{ playbook_dir }}/../temp/ca-key.pem \
+        -hostname {{ inventory_hostname }},{{ ip_address.stdout_lines[0] }} \
+        -profile kubernetes \
+        {{ inventory_hostname }}-csr.json \
+        | cfssljson -bare {{ inventory_hostname }}
+      args:
+        executable: "/bin/bash"
+        chdir: "{{ temp_dir }}"
+        creates: "{{ temp_dir }}/{{ inventory_hostname }}-key.pem"
+      delegate_to: 127.0.0.1

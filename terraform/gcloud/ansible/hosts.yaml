@@ -1,0 +1,13 @@
+all:
+  hosts:
+    localhost:
+      vars:
+        ansible_connection: local
+        ansible_python_interprester: "{{ ansible_playbook_python }}"
+  children:
+    controllers:
+      hosts:
+        controller-[0:2]:
+    workers:
+      hosts:
+        worker-[0:2]:

@@ -1,0 +1,4 @@
+---
+template_dir: "{{ playbook_dir }}/../templates"
+temp_dir: "{{ playbook_dir }}/../temp"
+csr_template: "{{ template_dir }}/csr.json.j2"
